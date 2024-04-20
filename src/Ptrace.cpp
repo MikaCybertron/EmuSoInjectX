@@ -1,11 +1,15 @@
 #include "Ptrace.h"
 #include <sys/ptrace.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <elf.h>
 #include <vector>
 #include <unordered_map>
 #include <stack>
 #include "LinuxProcess.h"
 #include "Errors.h"
+#include <unistd.h>
 
 template<typename T, typename K>
 long Ptrace(long request, unsigned long pid, T addr, K data)
@@ -21,10 +25,18 @@ long Ptrace(long request, unsigned long pid, T addr, K data)
     return result;
 }
 
+static uint64_t ms() {
+    struct timespec spec;
+    clock_gettime(CLOCK_MONOTONIC, &spec);
+    return (spec.tv_sec * 1000) + (spec.tv_nsec / 1.0e6);
+}
+
 bool PtraceStopCallbackResume(int procId, std::function<void()> callback)
 {
     if (Ptrace(PTRACE_ATTACH, procId, NULL, NULL) < 0) 
         return false;
+
+    printf("[+] Process Attached\n");
 
     int status;
 
@@ -35,13 +47,17 @@ bool PtraceStopCallbackResume(int procId, std::function<void()> callback)
     if (Ptrace(PTRACE_DETACH, procId, NULL, NULL) < 0)
         return false;
 
+    printf("[+] Process Detached\n");
+
     return true;
 }
 
 bool GetContext(int procId, user_regs_struct& ctx)
 {
+    // ctx = {0};
+
     if(Ptrace(PTRACE_GETREGS, procId, NULL, &ctx) < 0)
-        return false;
+                return false;
 
     return true;
 }
@@ -49,7 +65,7 @@ bool GetContext(int procId, user_regs_struct& ctx)
 bool SetContext(int procId, user_regs_struct& ctx)
 {
     if(Ptrace(PTRACE_SETREGS, procId, NULL, &ctx) < 0)
-        return false;
+            return false;
 
     return true;
 }
@@ -62,49 +78,175 @@ bool PtraceContinue(int procId)
     return true;
 }
 
-uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<uint32_t>& params)
+#ifdef __i386__
+
+void PrintRegisters(user_regs_struct* regs) {
+    printf("EIP: 0x%lx ESP: 0x%lx EBP: 0x%lx EAX: 0x%lx EBX: 0x%lx ECX: 0x%lx EDX: 0x%lx ESI: 0x%lx EDI: 0x%lx\n",
+        regs->eip, regs->esp, regs->ebp, regs->eax, regs->ebx, regs->ecx, regs->edx, regs->esi, regs->edi);
+}
+
+void PtraceCallSetup(int procId, user_regs_struct& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
+    ctx.eip = callEntryAddr;
+    ctx.esp -= (params.size()) * sizeof(size_t);
+    PtraceWriteProcessMemory(procId, ctx.esp, params.data(), params.size() * sizeof(size_t));
+    ctx.esp -= sizeof(size_t);
+    PtraceWriteProcessMemoryWrapper(procId, ctx.esp, retAddr);
+}
+
+uint64_t ContextProgramCounter(user_regs_struct& ctx)
+{
+    return ctx.eip;
+}
+
+uint64_t ContextProgramReturn(user_regs_struct& ctx)
+{
+    return ctx.eax;
+}
+#endif
+
+#ifdef __x86_64__
+
+void PrintRegisters(user_regs_struct* regs) {
+    printf("RIP: 0x%llx RSP: 0x%llx RBP: 0x%llx RAX: 0x%llx RBX: 0x%llx RCX: 0x%llx RDX: 0x%llx RSI: 0x%llx RDI: 0x%llx\n",
+        regs->rip, regs->rsp, regs->rbp, regs->rax, regs->rbx, regs->rcx, regs->rdx, regs->rsi, regs->rdi);
+}
+
+void PtraceCallSetup(int procId, user_regs_struct& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
+    ctx.rip = callEntryAddr;
+
+    switch (params.size())
+    {
+    default:
+    case 6:
+        ctx.r9 = params[5];
+    case 5:
+        ctx.r8 = params[4];
+    case 4:
+        ctx.rcx = params[3];
+    case 3:
+        ctx.rdx = params[2];
+    case 2:
+        ctx.rsi = params[1];
+    case 1:
+        ctx.rdi = params[0];
+    case 0:
+        break;
+    }
+
+    if (params.size() > 6)
+    {
+        ctx.rsp -= (params.size() - 6) * sizeof(size_t);
+        PtraceWriteProcessMemory(procId, ctx.rsp, params.data() + 6, (params.size() - 6) * sizeof(size_t));
+    }
+
+    ctx.rsp -= sizeof(size_t);
+    PtraceWriteProcessMemoryWrapper(procId, ctx.rsp, retAddr);
+}
+
+uint64_t ContextProgramCounter(user_regs_struct& ctx)
+{
+    return ctx.rip;
+}
+
+uint64_t ContextProgramReturn(user_regs_struct& ctx)
+{
+    return ctx.rax;
+}
+#endif
+
+void PrintRegisters(user_regs_struct& regs)
+{
+    PrintRegisters(&regs);
+}
+
+#if !defined(__i386__) && !defined(__x86_64__)
+#error Unsupported Arch
+#endif
+
+bool ProcessWaitSignal(int procId, int signalType)
+{
+    int status = 0;
+
+    while(waitpid(procId, &status, WUNTRACED) == procId)
+    {
+        if (WIFEXITED(status)) 
+            return false;
+
+        // At this point process hasnt Exited
+
+        // printf("At this point process hasnt Exited\n");
+
+        if(WIFSTOPPED(status) == false)
+        {
+            if(PtraceContinue(procId)) return false;
+            continue;
+        }
+
+        // At this point process was not stopped
+        // printf("At this point process was not stopped\n");
+
+
+        if(WSTOPSIG(status) != signalType)
+        {
+            if(PtraceContinue(procId)) return false;
+            continue;
+        }
+
+        // SignalType Fired detected
+        // printf("%d signal Fired detected\n", signalType);
+
+        break;
+    }
+
+    return true;
+}
+
+uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<size_t>& params)
 {
     PushContext(procId);
 
-    struct user_regs_struct ctx;
+    user_regs_struct ctx { 0 };
 
     if(GetContext(procId, ctx) == false)
         return -1;
 
-    ctx.eip = entry;
+    PrintRegisters(ctx);
 
-    size_t spaceForParams = params.size() * sizeof(uint32_t);
+    PtraceCallSetup(procId, ctx, entry, params, 0x0);
 
-    // Writing the params
-    ctx.esp -= spaceForParams;
-    PtraceWriteProcessMemory(procId, ctx.esp, params.data(), spaceForParams);
-
-    // Writing the Ret Address ( zero to cause trouble =), so we get notified at call completion )
-    ctx.esp -= sizeof(uint32_t);
-    PtraceWriteProcessMemoryWrapper<uint32_t>(procId, ctx.esp, 0x0);
+    PrintRegisters(ctx);
 
     SetContext(procId, ctx);
 
-    // Now lets just run and wait
+    //// Now lets just run and wait
     if(PtraceContinue(procId) == false)
-        return -1;
+        return -2;
 
-    int status;
+    // do {
+        if(ProcessWaitSignal(procId, SIGSEGV) == false)
+            return -3;
 
-    waitpid(procId, &status, WUNTRACED);  
+        if(GetContext(procId, ctx) == false)
+            return -4;
+        
+        if(ContextProgramCounter(ctx) != 0)
+            PtraceContinue(procId);
+        
+    // } while(ContextProgramCounter(ctx) != 0);
 
-    if(GetContext(procId, ctx) == false)
-        return -1;
+    // Null-Call Found as expected
+
+    PrintRegisters(ctx);
 
     if(PopContext(procId) == false)
-        return -1;
+        return -5;
 
-    return ctx.eax;
+    return ContextProgramReturn(ctx);
 }
 
-uintptr_t PtraceCallModuleSymbol(int procId, const char* module, const char* symbol, bool nb, const std::vector<uint32_t>& params)
+uintptr_t PtraceCallModuleSymbol(int procId, const char* module, const char* symbol, bool nb, const std::vector<size_t>& params)
 {
-    uintptr_t symbolEntry = FindModuleSymbol32(procId, module, symbol, nb);
+    uintptr_t symbolEntry = FindModuleSymbol(procId, module, symbol, nb);
 
     if(symbolEntry == INVALID_SYMBOL_ADDR)
     {
@@ -112,76 +254,76 @@ uintptr_t PtraceCallModuleSymbol(int procId, const char* module, const char* sym
         return 0;
     }
 
+    printf("[+] %s %s Found: %p\n", module, symbol, (void*)symbolEntry);
+
     return PtraceCall(procId, symbolEntry, params);
 }
 
-bool PtraceReadProcessMemory(int pid, unsigned int addr, void* data, size_t len) {
-    uint32_t i, j, remain;    
-    uint8_t *laddr;    
-    
-    union u {    
-        long val;    
-        char chars[sizeof(long)];    
-    } d;    
-    
-    j = len / 4;    
-    remain = len % 4;    
-    
-    laddr = (uint8_t *)data;    
-    
-    for (i = 0; i < j; i ++) {    
-        d.val = Ptrace(PTRACE_PEEKTEXT, pid, addr, 0);    
-        memcpy(laddr, d.chars, 4);    
-        addr += 4;    
-        laddr += 4;    
-    }    
-    
-    if (remain > 0) {    
-        d.val = Ptrace(PTRACE_PEEKTEXT, pid, addr, 0);    
-        memcpy(laddr, d.chars, remain);    
-    }    
-    
+bool PtraceReadProcessMemory(int pid, uintptr_t addr, void* data, size_t len) {
+    size_t i, j, remain;
+    uint8_t* laddr;
+
+    union u {
+        uintptr_t val;
+        uint8_t chars[sizeof(uintptr_t)];
+    } d;
+
+    j = len / sizeof(uintptr_t);
+    remain = len % sizeof(uintptr_t);
+
+    laddr = (uint8_t*)data;
+
+    for (i = 0; i < j; i++) {
+        d.val = ptrace(PTRACE_PEEKTEXT, pid, addr, nullptr);
+        memcpy(laddr, d.chars, sizeof(uintptr_t));
+        addr += sizeof(uintptr_t);
+        laddr += sizeof(uintptr_t);
+    }
+
+    if (remain > 0) {
+        d.val = ptrace(PTRACE_PEEKTEXT, pid, addr, nullptr);
+        memcpy(laddr, d.chars, remain);
+    }
+
     return true;
 }
 
-bool PtraceWriteProcessMemory(int pid, unsigned int addr, const void* data, size_t len) {
-    uint32_t i, j, remain;    
-    uint8_t *laddr;    
-    
-    union u {    
-        long val;    
-        char chars[sizeof(long)];    
-    } d;    
-    
-    j = len / 4;    
-    remain = len % 4;    
-    
-    laddr = (uint8_t *)data;    
-    
-    for (i = 0; i < j; i ++) {    
-        memcpy(d.chars, laddr, 4);    
-        Ptrace(PTRACE_POKETEXT, pid, addr, d.val);    
-    
-        addr  += 4;    
-        laddr += 4;    
-    }    
-    
-    if (remain > 0) {    
-        d.val = Ptrace(PTRACE_PEEKTEXT, pid, addr, 0);    
-        for (i = 0; i < remain; i ++) {    
-            d.chars[i] = *laddr ++;    
-        }    
-    
-        Ptrace(PTRACE_POKETEXT, pid, addr, d.val);    
-    }    
-    
-    return true;    
+bool PtraceWriteProcessMemory(int pid, uintptr_t addr, const void* data, size_t len) {
+    size_t i, remain;
+    uint8_t* laddr;
+
+    union u {
+        uintptr_t val;
+        uint8_t chars[sizeof(uintptr_t)];
+    } d;
+
+    i = 0;
+    laddr = (uint8_t*)data;
+
+    // Write data in chunks of sizeof(uintptr_t)
+    for (; i + sizeof(uintptr_t) <= len; i += sizeof(uintptr_t)) {
+        memcpy(d.chars, laddr, sizeof(uintptr_t));
+        ptrace(PTRACE_POKETEXT, pid, addr + i, d.val);
+        laddr += sizeof(uintptr_t);
+    }
+
+    // Write any remaining bytes
+    remain = len - i;
+    if (remain > 0) {
+        d.val = ptrace(PTRACE_PEEKTEXT, pid, addr + i, nullptr);
+        for (size_t j = 0; j < remain; j++) {
+            d.chars[j] = *laddr++;
+        }
+        ptrace(PTRACE_POKETEXT, pid, addr + i, d.val);
+    }
+
+    return true;
 }
 
 
-std::unordered_map<int, std::unordered_map<unsigned int, std::stack<std::vector<unsigned char>>>> snapshots;
+std::unordered_map<int, std::unordered_map<uintptr_t, std::stack<std::vector<unsigned char>>>> snapshots;
 
-bool PtracePushSnapshot(int procId, unsigned int atAddr, size_t len)
+bool PtracePushSnapshot(int procId, uintptr_t atAddr, size_t len)
 {
     auto& snapshotStack = snapshots[procId][atAddr];
     snapshotStack.push(std::vector<unsigned char>(len));
@@ -196,7 +338,7 @@ bool PtracePushSnapshot(int procId, unsigned int atAddr, size_t len)
     return true;
 }
 
-bool PtracePopSnapshot(int procId, unsigned int atAddr)
+bool PtracePopSnapshot(int procId, uintptr_t atAddr)
 {
     auto pidIt = snapshots.find(procId);
     if (pidIt == snapshots.end())

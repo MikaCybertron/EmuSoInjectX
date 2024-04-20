@@ -1,11 +1,11 @@
-#include "EmuInjectArm.h"
-#include "PtraceRPCWrappers.h"
-#include "Ptrace.h"
-#include "Helper.h"
-#include "Errors.h"
-#include "LinuxProcess.h"
-#include "RemoteString.h"
-#include "dlfcn.h"
+#include <EmuInjectArm.h>
+#include <PtraceRPCWrappers.h>
+#include <Ptrace.h>
+#include <Helper.h>
+#include <Errors.h>
+#include <LinuxProcess.h>
+#include <RemoteString.h>
+#include <dlfcn.h>
 
 bool EmuInjectArm::Inject(const char* pProcName, const char* pLibPath)
 {

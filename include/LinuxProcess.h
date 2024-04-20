@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <vector>
 #include <string>
-#include<functional>
+#include <functional>
 
 #define INVALID_PROCESS_ID (~((int)0))
 #define INVALID_MODULE_BASE_ADDR (~((unsigned int)0))
@@ -20,4 +20,4 @@ uintptr_t FindModuleBaseAddress(int procId, const char* name, bool nb = false);
 std::string FindModulePath(FILE* mapsFile, const char* name, bool nb = false);
 std::string FindModulePath(int procId, const char* name, bool nb = false);
 
-uintptr_t FindModuleSymbol32(int procId, const char* moduleName, const char* symbolName, bool nb = false);
+uintptr_t FindModuleSymbol(int procId, const char* moduleName, const char* symbolName, bool nb = false);

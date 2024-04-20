@@ -11,7 +11,7 @@ uintptr_t PtraceCallMMap(int procId, size_t size, int prot)
         0x0,
         size,
         (unsigned int)prot,
-        MAP_PRIVATE|MAP_ANONYMOUS,
+        MAP_PRIVATE | MAP_ANONYMOUS,
         (unsigned int)-1,
         0
     });
@@ -21,7 +21,23 @@ void* PtraceCallNativeBridgeDlopen(int procId, uintptr_t libPathRemoteAddr, int 
 {
     return (void*)PtraceCallModuleSymbol(procId, "libnativebridge.so", NATIVEBRIDGE_LOADLIB_SYMNAME, false, {
         libPathRemoteAddr,
-        (unsigned int)mode
+        (unsigned int)mode,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0,
+        0x0
     });
 }
 

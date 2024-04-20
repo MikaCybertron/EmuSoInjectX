@@ -1,5 +1,5 @@
 #include <iostream>
-#include <EmuInjectArm.h>
+#include <EmuInject.h>
 #include "Errors.h"
 
 void PrintHelp()
@@ -15,7 +15,7 @@ int main(int argv, const char** argc)
         return 1;
     }
 
-    if(EmuInjectArm::Inject(argc[1], argc[2]) == false)
+    if(EmuInject::Inject(argc[1], argc[2]) == false)
     {
         printf("Error: %s\n", FormatLastError());
         return 1;

@@ -1,4 +1,4 @@
-#include "LinuxProcess.h"
+#include <LinuxProcess.h>
 #include <string.h>
 #include <dirent.h>
 #include <stdlib.h>
@@ -9,8 +9,8 @@
 #include <memory>
 #include <vector>
 #include <string.h>
-#include <ELFHelper.h>
-#include "Helper.h"
+#include <Helper.h>
+#include <ELFPP.hpp>
 
 int FindProcessId(const char* processName)
 {
@@ -167,7 +167,7 @@ std::string FindModulePath(FILE* mapsFile, const char* name, bool nb)
     return path;
 }
 
-uintptr_t FindModuleSymbol32(int procId, const char* moduleName, const char* symbolName, bool nb)
+uintptr_t FindModuleSymbol(int procId, const char* moduleName, const char* symbolName, bool nb)
 {
     std::string modulePath = FindModulePath(procId, moduleName, nb);
 
@@ -179,10 +179,32 @@ uintptr_t FindModuleSymbol32(int procId, const char* moduleName, const char* sym
     if(moduleBase == INVALID_MODULE_BASE_ADDR)
         return INVALID_SYMBOL_ADDR;
 
-    size_t symbolOffset = GetSymbolOffset32(modulePath.c_str(), symbolName);
+    bool bIs64 = false;
 
-    if(symbolOffset == INVALID_SYMBOL_OFF)
+    if (ELFPP::ElfPeekIs64(modulePath.c_str(), bIs64) == false)
         return INVALID_SYMBOL_ADDR;
+
+    uint64_t symbolOffset = 0;
+
+    if (bIs64)
+    {
+        ELFPP::ElfPack<Elf64_Ehdr> libPack;
+
+        if(ELFPP::ElfOpen(modulePath.c_str(), libPack) == false)
+            return INVALID_SYMBOL_ADDR;
+
+        if(ELFPP::ElfLookupSymbol<Elf64_Ehdr, Elf64_Shdr, Elf64_Sym>(libPack, symbolName, &symbolOffset) == false)
+            return INVALID_SYMBOL_ADDR;
+    }
+    else {
+        ELFPP::ElfPack<Elf32_Ehdr> libPack;
+
+        if (ELFPP::ElfOpen(modulePath.c_str(), libPack) == false)
+            return INVALID_SYMBOL_ADDR;
+
+        if (ELFPP::ElfLookupSymbol<Elf32_Ehdr, Elf32_Shdr, Elf32_Sym>(libPack, symbolName, &symbolOffset) == false)
+            return INVALID_SYMBOL_ADDR;
+    }
 
     return moduleBase + symbolOffset;
 }

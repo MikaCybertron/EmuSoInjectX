@@ -11,7 +11,7 @@ RemoteString::RemoteString(int procId, const char* str)
 
     mEntry = PtraceCallMMap(mProcId, mLen, PROT_READ);
 
-    if(mEntry < 0 == false)
+    if(int(mEntry) != -1)
     {
         PtraceWriteProcessMemory(mProcId, mEntry, str, mLen);
         return;

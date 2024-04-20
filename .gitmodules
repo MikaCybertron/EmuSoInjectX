@@ -1,3 +1,3 @@
-[submodule "vendor/TBS"]
-	path = vendor/TBS
-	url = https://github.com/pinwhell/TBS
+[submodule "vendor/ELFPP"]
+	path = vendor/ELFPP
+	url = https://github.com/pinwhell/ELFPP
