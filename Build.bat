@@ -1,1 +1,0 @@
-ndk-build clean & ndk-build -j4 -B

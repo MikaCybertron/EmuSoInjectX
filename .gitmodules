@@ -1,0 +1,3 @@
+[submodule "vendor/TBS"]
+	path = vendor/TBS
+	url = https://github.com/pinwhell/TBS
