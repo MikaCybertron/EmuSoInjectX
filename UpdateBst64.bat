@@ -1,0 +1,1 @@
+push-exec-cmake-bst x86_64 emuinj

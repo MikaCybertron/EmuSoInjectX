@@ -6,6 +6,7 @@
 #include <LinuxProcess.h>
 #include <RemoteString.h>
 #include <dlfcn.h>
+#include <unistd.h>
 
 bool EmuInjectArm::Inject(const char* pProcName, const char* pLibPath)
 {
@@ -34,10 +35,8 @@ bool EmuInjectArm::Inject(const char* pProcName, const char* pLibPath)
     bool bSucessdedInjection = false;
     
     bool result = PtraceStopCallbackResume(procId, [&]{
-        RemoteString rs(procId, pLibAbsolutePath.c_str());
-
-        bSucessdedInjection = PtraceCallNativeBridgeDlopen(procId, rs.mEntry, RTLD_NOW) != nullptr;
-
+        bSucessdedInjection = PtraceCallNativeBridgeDlopen(procId, pLibAbsolutePath.c_str(), RTLD_NOW) != nullptr;
+       
         if(bSucessdedInjection == false && IsLastErrorSet() == false)
             SetLastError(ERR_INJECTION_FAILED);
     });

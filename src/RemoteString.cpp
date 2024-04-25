@@ -1,29 +1,11 @@
-#include "RemoteString.h"
-#include "PtraceRPCWrappers.h"
+#include <RemoteString.h>
 #include <string.h>
-#include "Ptrace.h"
-#include <sys/mman.h>
 
 RemoteString::RemoteString(int procId, const char* str)
-    : mProcId(procId)
+    : mString(procId, str, strlen(str))
+{}
+
+RemoteString::operator bool()
 {
-    mLen = strlen(str);
-
-    mEntry = PtraceCallMMap(mProcId, mLen, PROT_READ);
-
-    if(int(mEntry) != -1)
-    {
-        PtraceWriteProcessMemory(mProcId, mEntry, str, mLen);
-        return;
-    }
-
-    mEntry = 0;
-}
-
-RemoteString::~RemoteString()
-{
-    if(mEntry)
-    {
-        PtraceCallMUnmap(mProcId, mEntry, mLen);
-    }
+    return mString;
 }

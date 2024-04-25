@@ -10,6 +10,10 @@
 #include "LinuxProcess.h"
 #include "Errors.h"
 #include <unistd.h>
+#include <dirent.h>
+
+typedef user_regs_struct Regs;
+
 
 template<typename T, typename K>
 long Ptrace(long request, unsigned long pid, T addr, K data)
@@ -23,12 +27,6 @@ long Ptrace(long request, unsigned long pid, T addr, K data)
     }
 
     return result;
-}
-
-static uint64_t ms() {
-    struct timespec spec;
-    clock_gettime(CLOCK_MONOTONIC, &spec);
-    return (spec.tv_sec * 1000) + (spec.tv_nsec / 1.0e6);
 }
 
 bool PtraceStopCallbackResume(int procId, std::function<void()> callback)
@@ -52,20 +50,19 @@ bool PtraceStopCallbackResume(int procId, std::function<void()> callback)
     return true;
 }
 
-bool GetContext(int procId, user_regs_struct& ctx)
+bool GetContext(int procId, Regs& ctx)
 {
-    // ctx = {0};
 
     if(Ptrace(PTRACE_GETREGS, procId, NULL, &ctx) < 0)
-                return false;
+        return false;
 
     return true;
 }
 
-bool SetContext(int procId, user_regs_struct& ctx)
+bool SetContext(int procId, Regs& ctx)
 {
     if(Ptrace(PTRACE_SETREGS, procId, NULL, &ctx) < 0)
-            return false;
+        return false;
 
     return true;
 }
@@ -80,25 +77,26 @@ bool PtraceContinue(int procId)
 
 #ifdef __i386__
 
-void PrintRegisters(user_regs_struct* regs) {
-    printf("EIP: 0x%lx ESP: 0x%lx EBP: 0x%lx EAX: 0x%lx EBX: 0x%lx ECX: 0x%lx EDX: 0x%lx ESI: 0x%lx EDI: 0x%lx\n",
+void PrintRegisters(Regs* regs) {
+    printf("EIP: 0x%lx\nESP: 0x%lx\nEBP: 0x%lx\nEAX: 0x%lx\nEBX: 0x%lx\nECX: 0x%lx\nEDX: 0x%lx\nESI: 0x%lx\nEDI: 0x%lx\n\n",
         regs->eip, regs->esp, regs->ebp, regs->eax, regs->ebx, regs->ecx, regs->edx, regs->esi, regs->edi);
 }
+extern void HexDump(const void* buffer, std::size_t size);
 
-void PtraceCallSetup(int procId, user_regs_struct& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
+void PtraceCallSetup(int procId, Regs& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
     ctx.eip = callEntryAddr;
-    ctx.esp -= (params.size()) * sizeof(size_t);
+    ctx.esp -= params.size() * sizeof(uintptr_t);
     PtraceWriteProcessMemory(procId, ctx.esp, params.data(), params.size() * sizeof(size_t));
-    ctx.esp -= sizeof(size_t);
+    ctx.esp -= sizeof(uintptr_t);
     PtraceWriteProcessMemoryWrapper(procId, ctx.esp, retAddr);
 }
 
-uint64_t ContextProgramCounter(user_regs_struct& ctx)
+uint64_t ContextProgramCounter(Regs& ctx)
 {
     return ctx.eip;
 }
 
-uint64_t ContextProgramReturn(user_regs_struct& ctx)
+uint64_t ContextProgramReturn(Regs& ctx)
 {
     return ctx.eax;
 }
@@ -106,13 +104,15 @@ uint64_t ContextProgramReturn(user_regs_struct& ctx)
 
 #ifdef __x86_64__
 
-void PrintRegisters(user_regs_struct* regs) {
-    printf("RIP: 0x%llx RSP: 0x%llx RBP: 0x%llx RAX: 0x%llx RBX: 0x%llx RCX: 0x%llx RDX: 0x%llx RSI: 0x%llx RDI: 0x%llx\n",
+void PrintRegisters(Regs* regs) {
+    printf("RIP: 0x%llx\nRSP: 0x%llx\nRBP: 0x%llx\nRAX: 0x%llx\nRBX: 0x%llx\nRCX: 0x%llx\nRDX: 0x%llx\nRSI: 0x%llx\nRDI: 0x%llx\n\n",
         regs->rip, regs->rsp, regs->rbp, regs->rax, regs->rbx, regs->rcx, regs->rdx, regs->rsi, regs->rdi);
 }
 
-void PtraceCallSetup(int procId, user_regs_struct& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
+void PtraceCallSetup(int procId, Regs& ctx, size_t callEntryAddr, const std::vector<size_t>& params, uintptr_t retAddr) {
     ctx.rip = callEntryAddr;
+
+    ctx.rsp = (ctx.rsp - 0xFull) & ~0xFull;
 
     switch (params.size())
     {
@@ -135,26 +135,26 @@ void PtraceCallSetup(int procId, user_regs_struct& ctx, size_t callEntryAddr, co
 
     if (params.size() > 6)
     {
-        ctx.rsp -= (params.size() - 6) * sizeof(size_t);
-        PtraceWriteProcessMemory(procId, ctx.rsp, params.data() + 6, (params.size() - 6) * sizeof(size_t));
+        ctx.rsp -= (params.size() - 6) * sizeof(uintptr_t);
+        PtraceWriteProcessMemory(procId, ctx.rsp, params.data() + 6, (params.size() - 6) * sizeof(uintptr_t));
     }
 
-    ctx.rsp -= sizeof(size_t);
+    ctx.rsp -= sizeof(uintptr_t);
     PtraceWriteProcessMemoryWrapper(procId, ctx.rsp, retAddr);
 }
 
-uint64_t ContextProgramCounter(user_regs_struct& ctx)
+uint64_t ContextProgramCounter(Regs& ctx)
 {
     return ctx.rip;
 }
 
-uint64_t ContextProgramReturn(user_regs_struct& ctx)
+uint64_t ContextProgramReturn(Regs& ctx)
 {
     return ctx.rax;
 }
 #endif
 
-void PrintRegisters(user_regs_struct& regs)
+void PrintRegisters(Regs& regs)
 {
     PrintRegisters(&regs);
 }
@@ -163,49 +163,46 @@ void PrintRegisters(user_regs_struct& regs)
 #error Unsupported Arch
 #endif
 
-bool ProcessWaitSignal(int procId, int signalType)
-{
+bool ProcessWaitSignal(int procId, int signalType) {
     int status = 0;
 
-    while(waitpid(procId, &status, WUNTRACED) == procId)
-    {
-        if (WIFEXITED(status)) 
+    while (waitpid(procId, &status, 0) != -1) {
+        if (WIFEXITED(status)) {
+            // Child process exited normally
             return false;
+        }
 
-        // At this point process hasnt Exited
-
-        // printf("At this point process hasnt Exited\n");
-
-        if(WIFSTOPPED(status) == false)
-        {
-            if(PtraceContinue(procId)) return false;
+        if (!WIFSTOPPED(status)) {
+            // Child process neither exited nor stopped
             continue;
         }
 
-        // At this point process was not stopped
-        // printf("At this point process was not stopped\n");
-
-
-        if(WSTOPSIG(status) != signalType)
-        {
-            if(PtraceContinue(procId)) return false;
+        if (!WIFSIGNALED(status)) {
+            // Child process stopped, but not by a signal
             continue;
         }
 
-        // SignalType Fired detected
-        // printf("%d signal Fired detected\n", signalType);
+        printf("Signal Happend %d\n", WTERMSIG(status));
+        if (WTERMSIG(status) != signalType) {
+            // The signal is not the one we're waiting for
+            continue;
+        }
 
+        // Found the desired signal
         break;
     }
 
+    // Return true if the signal we were waiting for was received
     return true;
 }
+
+#include <Helper.h>
 
 uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<size_t>& params)
 {
     PushContext(procId);
 
-    user_regs_struct ctx { 0 };
+    Regs ctx {};
 
     if(GetContext(procId, ctx) == false)
         return -1;
@@ -222,17 +219,21 @@ uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<size_t>& par
     if(PtraceContinue(procId) == false)
         return -2;
 
-    // do {
-        if(ProcessWaitSignal(procId, SIGSEGV) == false)
-            return -3;
+re_status:
+    int status;
+    if (waitpid(procId, &status, 0) == -1)
+        return -3;
 
-        if(GetContext(procId, ctx) == false)
-            return -4;
-        
-        if(ContextProgramCounter(ctx) != 0)
-            PtraceContinue(procId);
-        
-    // } while(ContextProgramCounter(ctx) != 0);
+    if(GetContext(procId, ctx) == false)
+        return -4;
+
+    char buff[20];
+    PtraceReadProcessMemory(procId, ContextProgramCounter(ctx), buff, 20);
+    HexDump(buff, sizeof(buff));
+    printf("Status %d at %p\n", status, ContextProgramCounter(ctx));
+
+    if (ContextProgramCounter(ctx) != 0)
+        return 0;
 
     // Null-Call Found as expected
 
@@ -363,10 +364,10 @@ bool PtracePopSnapshot(int procId, uintptr_t atAddr)
     return true;
 }
 
-std::unordered_map<int, std::stack< user_regs_struct >> contexts;
+std::unordered_map<int, std::stack< Regs >> contexts;
 
 bool PushContext(int procId) {
-    user_regs_struct ctx;
+    Regs ctx;
     if (!GetContext(procId, ctx))
         return false;
 
@@ -380,7 +381,7 @@ bool PopContext(int procId) {
     if (stackIt == contexts.end())
         return false;
 
-    std::stack<user_regs_struct>& stack = stackIt->second;
+    std::stack<Regs>& stack = stackIt->second;
 
     if (stack.empty())
         return false;

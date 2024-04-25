@@ -4,6 +4,7 @@
 
 #include <sys/user.h>
 
+int ProcessMostUsedThreadGet(int pid);
 bool PtraceStopCallbackResume(int procId, std::function<void()> callback);
 
 bool SetContext(int procId, user_regs_struct& ctx);
