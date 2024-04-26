@@ -33,7 +33,7 @@ void* PtraceCallNativeBridgeDlopen(int procId, const char* libPath, int mode)
 
     return (void*)PtraceCallModuleSymbol(procId, "libnativebridge.so", NATIVEBRIDGE_LOADLIB_SYMNAME, false, {
         rs.mString.mBuffer.mEntry,
-        (unsigned int)mode
+        (size_t)mode
         });
 }
 
@@ -89,5 +89,5 @@ MmapAllocHandle::~MmapAllocHandle()
 
 MmapAllocHandle::operator bool()
 {
-    return mEntry != -1ull;
+    return mEntry != -1;
 }

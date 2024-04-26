@@ -13,9 +13,11 @@ struct MmapAllocHandle {
 
     operator bool();
 
-    int mProcessId;
-	uint64_t mEntry;
+	uintptr_t mEntry;
     size_t mSize;
+
+private:
+    int mProcessId;
 };
 
 MmapAllocHandle PtraceCallMMap(int procId, size_t size, int prot);

@@ -81,10 +81,10 @@ void PrintRegisters(Regs* regs) {
     printf("EIP: 0x%lx\nESP: 0x%lx\nEBP: 0x%lx\nEAX: 0x%lx\nEBX: 0x%lx\nECX: 0x%lx\nEDX: 0x%lx\nESI: 0x%lx\nEDI: 0x%lx\n\n",
         regs->eip, regs->esp, regs->ebp, regs->eax, regs->ebx, regs->ecx, regs->edx, regs->esi, regs->edi);
 }
-extern void HexDump(const void* buffer, std::size_t size);
 
 void PtraceCallSetup(int procId, Regs& ctx, size_t callEntryAddr, const std::vector<size_t>& params, size_t retAddr) {
     ctx.eip = callEntryAddr;
+    ctx.esp = (ctx.esp - 0xFul) & ~0xFul;
     ctx.esp -= params.size() * sizeof(uintptr_t);
     PtraceWriteProcessMemory(procId, ctx.esp, params.data(), params.size() * sizeof(size_t));
     ctx.esp -= sizeof(uintptr_t);
@@ -105,8 +105,8 @@ uint64_t ContextProgramReturn(Regs& ctx)
 #ifdef __x86_64__
 
 void PrintRegisters(Regs* regs) {
-    printf("RIP: 0x%llx\nRSP: 0x%llx\nRBP: 0x%llx\nRAX: 0x%llx\nRBX: 0x%llx\nRCX: 0x%llx\nRDX: 0x%llx\nRSI: 0x%llx\nRDI: 0x%llx\n\n",
-        regs->rip, regs->rsp, regs->rbp, regs->rax, regs->rbx, regs->rcx, regs->rdx, regs->rsi, regs->rdi);
+    printf("RIP: 0x%p\nRSP: 0x%p\nRBP: 0x%p\nRAX: 0x%p\nRBX: 0x%p\nRCX: 0x%p\nRDX: 0x%p\nRSI: 0x%p\nRDI: 0x%p\n\n",
+        (void*)regs->rip, (void*)regs->rsp, (void*)regs->rbp, (void*)regs->rax, (void*)regs->rbx, (void*)regs->rcx, (void*)regs->rdx, (void*)regs->rsi, (void*)regs->rdi);
 }
 
 void PtraceCallSetup(int procId, Regs& ctx, size_t callEntryAddr, const std::vector<size_t>& params, uintptr_t retAddr) {
@@ -167,36 +167,19 @@ bool ProcessWaitSignal(int procId, int signalType) {
     int status = 0;
 
     while (waitpid(procId, &status, 0) != -1) {
-        if (WIFEXITED(status)) {
-            // Child process exited normally
-            return false;
-        }
 
-        if (!WIFSTOPPED(status)) {
-            // Child process neither exited nor stopped
+        if (!WIFSTOPPED(status))
             continue;
-        }
 
-        if (!WIFSIGNALED(status)) {
-            // Child process stopped, but not by a signal
-            continue;
-        }
+        if (WSTOPSIG(status) == signalType)
+            return true;
 
-        printf("Signal Happend %d\n", WTERMSIG(status));
-        if (WTERMSIG(status) != signalType) {
-            // The signal is not the one we're waiting for
-            continue;
-        }
-
-        // Found the desired signal
-        break;
+        if (!PtraceContinue(procId))
+            break;
     }
 
-    // Return true if the signal we were waiting for was received
-    return true;
+    return false;
 }
-
-#include <Helper.h>
 
 uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<size_t>& params)
 {
@@ -205,42 +188,35 @@ uintptr_t PtraceCall(int procId, uintptr_t entry, const std::vector<size_t>& par
     Regs ctx {};
 
     if(GetContext(procId, ctx) == false)
-        return -1;
+        return -1u;
 
-    PrintRegisters(ctx);
+    //PrintRegisters(ctx);
 
     PtraceCallSetup(procId, ctx, entry, params, 0x0);
 
-    PrintRegisters(ctx);
+    //PrintRegisters(ctx);
 
     SetContext(procId, ctx);
 
     //// Now lets just run and wait
     if(PtraceContinue(procId) == false)
-        return -2;
+        return -1u;
 
-re_status:
-    int status;
-    if (waitpid(procId, &status, 0) == -1)
-        return -3;
+    if (ProcessWaitSignal(procId, SIGSEGV) == false)
+        return -1u;
 
-    if(GetContext(procId, ctx) == false)
-        return -4;
-
-    char buff[20];
-    PtraceReadProcessMemory(procId, ContextProgramCounter(ctx), buff, 20);
-    HexDump(buff, sizeof(buff));
-    printf("Status %d at %p\n", status, ContextProgramCounter(ctx));
+    if (GetContext(procId, ctx) == false)
+            return -1u;
 
     if (ContextProgramCounter(ctx) != 0)
-        return 0;
+        return -1u;
 
     // Null-Call Found as expected
 
-    PrintRegisters(ctx);
+    //PrintRegisters(ctx);
 
     if(PopContext(procId) == false)
-        return -5;
+        return -1u;
 
     return ContextProgramReturn(ctx);
 }
@@ -255,7 +231,7 @@ uintptr_t PtraceCallModuleSymbol(int procId, const char* module, const char* sym
         return 0;
     }
 
-    printf("[+] %s %s Found: %p\n", module, symbol, (void*)symbolEntry);
+    //printf("[+] %s %s Found: %p\n", module, symbol, (void*)symbolEntry);
 
     return PtraceCall(procId, symbolEntry, params);
 }
